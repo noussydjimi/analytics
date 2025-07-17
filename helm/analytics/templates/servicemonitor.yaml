@@ -1,0 +1,16 @@
+{{- if .Values.prometheus.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "analytics.fullname" . }}-servicemonitor
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: {{ include "analytics.name" . }}
+  endpoints:
+    - port: http
+      path: {{ .Values.prometheus.path }}
+      interval: {{ .Values.prometheus.interval }}
+{{- end }}

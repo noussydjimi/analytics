@@ -1,0 +1,47 @@
+name: Deploy to EKS via Helm
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - helm/**
+      - .github/workflows/deploy.yaml
+
+env:
+  CLUSTER_NAME: eks-cluster-name
+  AWS_REGION: eu-west-1
+  RELEASE_NAME: analytics-app
+  CHART_PATH: ./helm-chart
+  NAMESPACE: analytics
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+
+      - name: Deploy or upgrade Helm release
+        run: |
+          helm upgrade --install $RELEASE_NAME $CHART_PATH \
+            --namespace $NAMESPACE \
+            --create-namespace \
+            --set image.repository=noussydjimi/analytics \
+            --set image.tag=latest

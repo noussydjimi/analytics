@@ -1,0 +1,73 @@
+---
+# Source: analytics/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-analytics
+  labels:
+    app: analytics
+spec:
+  type: ClusterIP
+  selector:
+    app: analytics
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+# Source: analytics/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-analytics
+  labels:
+    app: analytics
+    helm.sh/chart: analytics-0.1.0
+    app.kubernetes.io/name: analytics
+    app.kubernetes.io/instance: analytics
+    app.kubernetes.io/version: 1.16.0
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: analytics
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8000"
+      labels:
+        app: analytics
+    spec:
+      containers:
+        - name: analytics-container
+          image: "localhost:5000/analytics:latest"
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+          resources:
+            limits:
+              cpu: 500m
+              memory: 1Gi
+            requests:
+              cpu: 250m
+              memory: 512Mi
+---
+# Source: analytics/templates/servicemonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: analytics-analytics-servicemonitor
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: analytics
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
