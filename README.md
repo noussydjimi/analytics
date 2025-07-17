@@ -241,6 +241,48 @@ Prometheus rules are used to detect idle containers. An environment is considere
 - CPU usage < 5% for 30+ minutes
 - Memory usage < 20% of allocated value
 
+
+```
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: analytics-memory-rules
+  labels:
+    release: prometheus
+    app: analytics
+spec:
+  groups:
+    - name: memory.rules
+      rules:
+        - alert: HighMemoryUsage
+          expr: (container_memory_usage_bytes / container_spec_memory_limit_bytes) > 0.9
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High memory usage detected on container {{ $labels.container }}"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} is using more than 90% of its memory limit."
+
+        - alert: OOMKilledContainer
+          expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Container terminated due to out-of-memory"
+            description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} was killed due to OOM."
+
+        - alert: UnderutilizedMemory
+          expr: (container_memory_usage_bytes / container_spec_memory_request_bytes) < 0.2
+          for: 15m
+          labels:
+            severity: info
+          annotations:
+            summary: "Container using less than 20% of requested memory"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} is underutilizing memory."
+```
+
+
 Alertmanager sends notifications to Slack when idle conditions are met.
 A downscaling policy is applied through KEDA for idle environments.
 
@@ -351,6 +393,110 @@ spec:
 
 ## QUESTION 5
 
+```
+Some processes that are going to run inside these environments require between
+100-250GB of data in memory
+a. Could you talk about a time when you needed to bring the data to the code, and
+how you architected this system?
+b. If you don’t have an example, could you talk through how you would go about
+architecting this?
+c. How would you monitor memory usage/errors?
+```
+
+
+To efficiently support environments that require massive memory usage, I would follow this design:
+
+#### Node Placement
+- Use **Karpenter** with custom provisioners targeting **high-memory instances** (e.g., AWS `r6id.32xlarge`, GCP `m2-ultramem-416`).
+- Enforce placement using:
+  - `nodeSelector` for memory-intensive nodes
+  - `resources.requests.memory: "250Gi"` to trigger proper scheduling
+
+If data can’t fully fit in memory, load subsets in chunks and page them through disk-backed caches using a scratch PVC or fast SSD
+
+
+
+To bring the data close to the code execution, we preload datasets into memory using an `initContainer`. This container is responsible for fetching the required dataset via SFTP **before** the main application container starts.
+
+
+```
+initContainers:
+  - name: preload-data
+    image: dockerhub/analytics/sftp-client:latest
+    volumes:
+      - name: inmemory-volume
+        emptyDir:
+          medium: Memory
+          sizeLimit: 250Gi
+```
+A memory-backed `emptyDir` volume (`medium: "Memory"`) is preferred in this context due to its extremely low latency, high throughput, and direct in-RAM access, which are critical for workloads that require fast, large-scale data processing. Compared to EBS (block storage) or S3 (object storage), `emptyDir` offers superior performance for in-memory operations by eliminating I/O bottlenecks and network latency. The only trade-off is durability: data stored in an `emptyDir` is lost when the pod is deleted. However, for most machine learning and data science use cases where datasets are loaded, processed, and discarded per session, persistence is often not required, making `emptyDir` the optimal choice.
+
+
+
+To track high memory usage and prevent out-of-memory crashes, I would rely on Prometheus metrics `container_memory_usage_bytes` combined with alerts and dashboards.
+
+
+
+
 
 
 # Troubleshooting
+
+```
+Try to solve the problems that might arise through the test by yourself (we are always available,
+but we are looking forward to seeing your problem solving skills and ability to self serve).
+```
+
+
+## Troubleshooting High-Memory Environments
+
+Environments requiring over 100 GB of memory introduce specific operational challenges. Below are potential issues that may arise, along with recommended diagnostic steps and resolution strategies.
+
+### Pod Fails with OOMKilled Status
+
+**Symptoms:**
+- Pod is terminated unexpectedly
+- `kubectl describe pod` shows `Reason: OOMKilled`
+- Prometheus reports memory usage close to or exceeding limit
+
+**Root Cause:**
+The container exceeded its `memory.limit` and was forcibly terminated by the kubelet.
+
+**Resolution:**
+- Analyze historical memory usage using `container_memory_max_usage_bytes`
+- Increase memory limits in Helm values (from `128Gi` to `256Gi`)
+- Enable chunk-based data processing to avoid full dataset loading
+- Configure memory alerting thresholds to detect early warning signs
+
+---
+
+### initContainer Hanging During Data Transfer
+
+**Symptoms:**
+- Pod remains in `Init` state indefinitely
+- Logs from `initContainer` show incomplete or stalled SFTP download
+- SFTP server may be unreachable or slow
+
+**Root Cause:**
+The `initContainer` is waiting on an SFTP file transfer that is too large or has stalled due to network issues.
+
+**Resolution:**
+- Add timeout logic or retry mechanism in the container script
+- Use pre-staged data via volume mounting if possible
+- Monitor container logs to track progress
+
+---
+
+### Volume Too Small for Dataset
+
+**Symptoms:**
+- Data transfer fails with `No space left on device`
+- `initContainer` crashes due to insufficient volume space
+
+**Root Cause:**
+The memory-backed `emptyDir` volume does not have enough capacity to store the dataset.
+
+**Resolution:**
+- Ensure `sizeLimit` matches expected dataset size.
+- Use disk-based volumes (SSD-backed PVC) as fallback for large files.
+- Split dataset into multiple smaller chunks.
