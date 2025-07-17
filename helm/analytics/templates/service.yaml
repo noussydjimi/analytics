@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "analytics.fullname" . }}
+  labels:
+    app: {{ include "analytics.name" . }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: {{ include "analytics.name" . }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP

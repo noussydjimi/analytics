@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "analytics.fullname" . }}
+  labels:
+    app: {{ include "analytics.name" . }}
+    {{- include "analytics.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "analytics.name" . }}
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "{{ .Values.prometheus.enabled }}"
+        prometheus.io/path: "{{ .Values.prometheus.path }}"
+        prometheus.io/port: "{{ .Values.service.port }}"
+      labels:
+        app: {{ include "analytics.name" . }}
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}-container
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+              name: http
+          {{- if .Values.resources }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          {{- end }}
